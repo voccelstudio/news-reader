@@ -3,21 +3,29 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader | Voccel</title>
+    <title>Voccel News | Editor's Choice</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
-  :root {
-    --color-background-primary: #ffffff;
-    --color-border-tertiary: #f0f0f0;
-    --color-text-primary: #1a1a1a;
-    --color-text-secondary: #666666;
-    --color-text-tertiary: #999999;
-    font-family: 'Inter', system-ui, sans-serif;
-  }
-  body { background-color: #f8f9fa; margin: 0; }
-</style>
+      :root {
+        --bg: #fbfbfb;
+        --card-bg: #ffffff;
+        --text-main: #1a1a1a;
+        --text-sub: #666666;
+        --accent: #000000;
+        --border: rgba(0,0,0,0.05);
+      }
+      body { 
+        background-color: var(--bg); 
+        margin: 0; 
+        font-family: 'Inter', sans-serif;
+        color: var(--text-main);
+        -webkit-font-smoothing: antialiased;
+      }
+      * { box-sizing: border-box; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
-   <script type="module" src="/main.jsx"></script>
+    <script type="module" src="/main.jsx"></script>
   </body>
 </html>
