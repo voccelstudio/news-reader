@@ -10,7 +10,7 @@ const FEEDS = [
   { url: "https://www.artificialintelligence-news.com/feed/", label: "AI News", cat: "ai" },
 ];
 
-const PROXY = "https://api.rss2json.com/v1/api.json?rss_url=";
+const PROXY = "https://api.allorigins.win/get?url=";
 
 const CAT_LABELS = { arquitectura: "Arquitectura", diseño: "Diseño", tech: "Tech / Dev", ai: "AI" };
 const BADGE_STYLES = {
