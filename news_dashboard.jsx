@@ -10,8 +10,8 @@ const FEEDS = [
   { url: "https://www.artificialintelligence-news.com/feed/", label: "AI News", cat: "ai" },
 ];
 
-// Usamos un proxy más abierto
-const PROXY = "https://api.allorigins.win/get?url=";
+// rss2json: proxy confiable que convierte RSS → JSON sin problemas de CORS
+const PROXY = "https://api.rss2json.com/v1/api.json?rss_url=";
 
 const CAT_LABELS = { arquitectura: "Arquitectura", diseño: "Diseño", tech: "Tech / Dev", ai: "AI" };
 const BADGE_STYLES = {
@@ -32,26 +32,40 @@ export default function NewsDashboard() {
     try {
       const allData = await Promise.all(
         FEEDS.map(async (feed) => {
-          // AllOrigins devuelve un JSON con el contenido en 'contents'
-          const res = await fetch(`${PROXY}${encodeURIComponent(feed.url)}`);
-          const data = await res.json();
-          
-          // Parseamos el XML que devuelve el proxy
-          const parser = new DOMParser();
-          const xml = parser.parseFromString(data.contents, "text/xml");
-          const entries = Array.from(xml.querySelectorAll("item, entry")).slice(0, 5);
+          try {
+            const res = await fetch(`${PROXY}${encodeURIComponent(feed.url)}`);
+            const data = await res.json();
 
-          return entries.map(entry => ({
-            title: entry.querySelector("title")?.textContent,
-            link: entry.querySelector("link")?.textContent || entry.querySelector("link")?.getAttribute("href"),
-            desc: entry.querySelector("description, summary")?.textContent?.replace(/<[^>]*>/g, '').slice(0, 150) + "...",
-            pubDate: entry.querySelector("pubDate, updated, published")?.textContent,
-            source: feed.label,
-            cat: feed.cat
-          }));
+            // rss2json devuelve status "ok" si el feed se parseó bien
+            if (data.status !== "ok") return [];
+
+            return data.items.slice(0, 5).map(item => ({
+              title: item.title,
+              link: item.link,
+              desc: item.description
+                ? item.description.replace(/<[^>]*>/g, '').slice(0, 150) + "..."
+                : "",
+              pubDate: item.pubDate,
+              source: feed.label,
+              cat: feed.cat
+            }));
+          } catch {
+            // Si un feed falla individualmente, lo ignoramos y seguimos
+            return [];
+          }
         })
       );
-      setItems(allData.flat().sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate)));
+
+      const sorted = allData
+        .flat()
+        .filter(it => it.title && it.link)
+        .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+
+      if (sorted.length === 0) {
+        setError("No se pudieron cargar noticias. Intentá de nuevo en un momento.");
+      } else {
+        setItems(sorted);
+      }
     } catch (err) {
       console.error(err);
       setError("Error al conectar con los servidores de noticias.");
@@ -64,10 +78,30 @@ export default function NewsDashboard() {
     loadFeeds();
   }, [loadFeeds]);
 
-  const fmtDate = (d) => d ? new Date(d).toLocaleDateString() : "";
+  const fmtDate = (d) => {
+    if (!d) return "";
+    const date = new Date(d);
+    return isNaN(date) ? "" : date.toLocaleDateString("es-AR", { day: "2-digit", month: "short", year: "numeric" });
+  };
 
-  if (loading) return <div style={{ padding: 40, textAlign: 'center', fontFamily: 'sans-serif' }}>Cargando últimas noticias de arquitectura y diseño...</div>;
-  if (error) return <div style={{ padding: 40, textAlign: 'center', color: 'red', fontFamily: 'sans-serif' }}>{error} <br/><button onClick={loadFeeds} style={{marginTop: 10}}>Reintentar</button></div>;
+  if (loading) return (
+    <div style={{ padding: 40, textAlign: 'center', fontFamily: 'sans-serif', color: '#666' }}>
+      Cargando últimas noticias...
+    </div>
+  );
+
+  if (error) return (
+    <div style={{ padding: 40, textAlign: 'center', color: 'red', fontFamily: 'sans-serif' }}>
+      {error}
+      <br />
+      <button
+        onClick={loadFeeds}
+        style={{ marginTop: 10, padding: "8px 16px", cursor: "pointer" }}
+      >
+        Reintentar
+      </button>
+    </div>
+  );
 
   return (
     <div style={{ maxWidth: 1200, margin: "0 auto", padding: "2rem", fontFamily: 'system-ui, sans-serif' }}>
@@ -76,7 +110,11 @@ export default function NewsDashboard() {
         <p style={{ color: "#666" }}>Inspiración diaria para arquitectos y diseñadores</p>
       </header>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "1.5rem" }}>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+        gap: "1.5rem"
+      }}>
         {items.map((it, i) => (
           <div key={i} style={{
             background: "#fff",
@@ -86,12 +124,15 @@ export default function NewsDashboard() {
             display: "flex",
             flexDirection: "column",
             gap: 10,
-            transition: "transform 0.2s",
             cursor: "default"
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{
-                fontSize: 10, padding: "3px 8px", borderRadius: 20, fontWeight: 600, textTransform: 'uppercase',
+                fontSize: 10,
+                padding: "3px 8px",
+                borderRadius: 20,
+                fontWeight: 600,
+                textTransform: 'uppercase',
                 ...(BADGE_STYLES[it.cat] || BADGE_STYLES.tech)
               }}>
                 {CAT_LABELS[it.cat]}
@@ -102,9 +143,20 @@ export default function NewsDashboard() {
             <p style={{ fontSize: 13, color: "#555", margin: 0, flexGrow: 1 }}>{it.desc}</p>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
               <span style={{ fontSize: 11, fontWeight: 600, color: "#888" }}>{it.source}</span>
-              <a href={it.link} target="_blank" rel="noopener noreferrer" style={{
-                fontSize: 12, color: "#000", fontWeight: 700, textDecoration: 'none', borderBottom: '1px solid #000'
-              }}>Leer más</a>
+              <a
+                href={it.link}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  fontSize: 12,
+                  color: "#000",
+                  fontWeight: 700,
+                  textDecoration: 'none',
+                  borderBottom: '1px solid #000'
+                }}
+              >
+                Leer más
+              </a>
             </div>
           </div>
         ))}
