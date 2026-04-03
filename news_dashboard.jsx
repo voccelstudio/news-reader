@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 
 const FEEDS = [
   { url: "https://feeds.feedburner.com/ArchDaily", label: "ArchDaily", cat: "arquitectura" },
@@ -26,43 +26,53 @@ export default function NewsDashboard() {
     try {
       const allData = await Promise.all(
         FEEDS.map(async (f) => {
-          const res = await fetch(`${PROXY}${encodeURIComponent(f.url)}`);
-          const data = await res.json();
-          const parser = new DOMParser();
-          const xml = parser.parseFromString(data.contents, "text/xml");
-          const entries = Array.from(xml.querySelectorAll("item, entry")).slice(0, 5);
-          
-          return entries.map(e => ({
-            title: e.querySelector("title")?.textContent || "Sin título",
-            link: e.querySelector("link")?.textContent || e.querySelector("link")?.getAttribute("href") || "#",
-            desc: e.querySelector("description, summary")?.textContent?.replace(/<[^>]*>/g, '').slice(0, 150) || "",
-            pubDate: e.querySelector("pubDate, updated, published")?.textContent || new Date().toISOString(),
-            source: f.label,
-            cat: f.cat
-          }));
+          try {
+            const res = await fetch(`${PROXY}${encodeURIComponent(f.url)}`);
+            const data = await res.json();
+            const parser = new DOMParser();
+            const xml = parser.parseFromString(data.contents, "text/xml");
+            const entries = Array.from(xml.querySelectorAll("item, entry")).slice(0, 5);
+            
+            return entries.map(e => ({
+              title: e.querySelector("title")?.textContent || "Sin título",
+              link: e.querySelector("link")?.textContent || e.querySelector("link")?.getAttribute("href") || "#",
+              desc: e.querySelector("description, summary")?.textContent?.replace(/<[^>]*>/g, '').slice(0, 150) || "",
+              pubDate: e.querySelector("pubDate, updated, published")?.textContent || new Date().toISOString(),
+              source: f.label,
+              cat: f.cat
+            }));
+          } catch (err) {
+            console.error("Error en feed individual:", f.label, err);
+            return [];
+          }
         })
       );
       setItems(allData.flat().sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate)));
     } catch (e) {
-      console.error("Error cargando feeds:", e);
+      console.error("Error general:", e);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
 
-  useEffect(() => { loadFeeds(); }, [loadFeeds]);
+  useEffect(() => {
+    loadFeeds();
+  }, [loadFeeds]);
 
-  if (loading) return (
-    <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', letterSpacing: '3px' }}>
-      CURADURÍA VOC CEL...
-    </div>
-  );
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', letterSpacing: '3px' }}>
+        CURADURÍA VOC CEL...
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: "4rem 2rem", maxWidth: 1200, margin: "0 auto", fontFamily: 'sans-serif' }}>
       <header style={{ marginBottom: "5rem", borderBottom: "2px solid #000", paddingBottom: "1.5rem", display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
         <div>
           <h1 style={{ fontSize: 56, fontWeight: 800, margin: 0, letterSpacing: "-3px", lineHeight: 0.8 }}>VOC <span style={{fontWeight: 200}}>CEL</span></h1>
-          <p style={{ margin: "10px 0 0 0", color: "#999", fontSize: 12, textTransform: 'uppercase', letterSpacing: '2px' }}>Intelligence & Design Feed</p>
+          <p style={{ margin: "10px 0 0 0", color: "#999", fontSize: 12, textTransform: 'uppercase', letterSpacing: '2px' }}>Architecture & Industrial Design Feed</p>
         </div>
       </header>
 
