@@ -42,14 +42,13 @@ export default function NewsDashboard() {
               cat: f.cat
             }));
           } catch (err) {
-            console.error("Error en feed individual:", f.label, err);
             return [];
           }
         })
       );
       setItems(allData.flat().sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate)));
     } catch (e) {
-      console.error("Error general:", e);
+      console.error(e);
     } finally {
       setLoading(false);
     }
