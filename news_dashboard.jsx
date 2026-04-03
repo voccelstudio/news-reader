@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 
 const FEEDS = [
   { url: "https://feeds.feedburner.com/ArchDaily", label: "ArchDaily", cat: "arquitectura" },
@@ -10,6 +10,7 @@ const FEEDS = [
   { url: "https://www.artificialintelligence-news.com/feed/", label: "AI News", cat: "ai" },
 ];
 
+// Usamos un proxy más abierto
 const PROXY = "https://api.allorigins.win/get?url=";
 
 const CAT_LABELS = { arquitectura: "Arquitectura", diseño: "Diseño", tech: "Tech / Dev", ai: "AI" };
@@ -17,178 +18,97 @@ const BADGE_STYLES = {
   arquitectura: { background: "#E1F5EE", color: "#0F6E56" },
   diseño: { background: "#FBEAF0", color: "#993556" },
   tech: { background: "#E6F1FB", color: "#185FA5" },
-  ai: { background: "#EEEDFE", color: "#534AB7" },
+  ai: { background: "#F3E8FF", color: "#6B21A8" }
 };
-
-function stripHtml(h = "") {
-  const tmp = document.createElement("div");
-  tmp.innerHTML = h;
-  const t = tmp.textContent || "";
-  return t.length > 140 ? t.slice(0, 140) + "…" : t;
-}
-
-function fmtDate(str) {
-  if (!str) return "";
-  const d = new Date(str);
-  if (isNaN(d)) return "";
-  return d.toLocaleDateString("es-PY", { day: "numeric", month: "short" });
-}
-
-async function fetchFeed(feed) {
-  try {
-    const res = await fetch(`${PROXY}${encodeURIComponent(feed.url)}&count=8`);
-    const data = await res.json();
-    if (data.status !== "ok") return [];
-    return (data.items || []).slice(0, 6).map((it) => ({
-      title: it.title || "Sin título",
-      desc: stripHtml(it.description || it.content),
-      link: it.link,
-      pubDate: it.pubDate,
-      source: feed.label,
-      cat: feed.cat,
-    }));
-  } catch {
-    return [];
-  }
-}
 
 export default function NewsDashboard() {
   const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [filter, setFilter] = useState("all");
-  const [lastUpdate, setLastUpdate] = useState(null);
-  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  const load = useCallback(async () => {
+  const loadFeeds = useCallback(async () => {
     setLoading(true);
-    setError("");
-    const results = await Promise.allSettled(FEEDS.map((f) => fetchFeed(f)));
-    const all = results
-      .flatMap((r) => (r.status === "fulfilled" ? r.value : []))
-      .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
-    if (!all.length) setError("No se pudieron cargar los feeds. Revisá tu conexión.");
-    setItems(all);
-    setLastUpdate(new Date().toLocaleTimeString("es-PY", { hour: "2-digit", minute: "2-digit" }));
-    setLoading(false);
+    setError(null);
+    try {
+      const allData = await Promise.all(
+        FEEDS.map(async (feed) => {
+          // AllOrigins devuelve un JSON con el contenido en 'contents'
+          const res = await fetch(`${PROXY}${encodeURIComponent(feed.url)}`);
+          const data = await res.json();
+          
+          // Parseamos el XML que devuelve el proxy
+          const parser = new DOMParser();
+          const xml = parser.parseFromString(data.contents, "text/xml");
+          const entries = Array.from(xml.querySelectorAll("item, entry")).slice(0, 5);
+
+          return entries.map(entry => ({
+            title: entry.querySelector("title")?.textContent,
+            link: entry.querySelector("link")?.textContent || entry.querySelector("link")?.getAttribute("href"),
+            desc: entry.querySelector("description, summary")?.textContent?.replace(/<[^>]*>/g, '').slice(0, 150) + "...",
+            pubDate: entry.querySelector("pubDate, updated, published")?.textContent,
+            source: feed.label,
+            cat: feed.cat
+          }));
+        })
+      );
+      setItems(allData.flat().sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate)));
+    } catch (err) {
+      console.error(err);
+      setError("Error al conectar con los servidores de noticias.");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const visible = filter === "all" ? items : items.filter((i) => i.cat === filter);
-  const counts = {
-    arch: items.filter((i) => i.cat === "arquitectura").length,
-    design: items.filter((i) => i.cat === "diseño").length,
-    tech: items.filter((i) => i.cat === "tech" || i.cat === "ai").length,
-  };
+  useEffect(() => {
+    loadFeeds();
+  }, [loadFeeds]);
 
-  const filters = [
-    { key: "all", label: "Todos" },
-    { key: "arquitectura", label: "Arquitectura" },
-    { key: "diseño", label: "Diseño industrial" },
-    { key: "tech", label: "Tech / Dev" },
-    { key: "ai", label: "AI" },
-  ];
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString() : "";
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', fontFamily: 'sans-serif' }}>Cargando últimas noticias de arquitectura y diseño...</div>;
+  if (error) return <div style={{ padding: 40, textAlign: 'center', color: 'red', fontFamily: 'sans-serif' }}>{error} <br/><button onClick={loadFeeds} style={{marginTop: 10}}>Reintentar</button></div>;
 
   return (
-    <div style={{ fontFamily: "var(--font-sans, sans-serif)", padding: "0 0 2rem" }}>
-      {/* Header */}
-      <div style={{ borderBottom: "0.5px solid var(--color-border-tertiary, #e5e5e5)", paddingBottom: "1rem", marginBottom: "1.5rem" }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: "1rem" }}>
-          <div>
-            <div style={{ fontSize: 18, fontWeight: 500 }}>Feed de noticias</div>
-            <div style={{ fontSize: 13, color: "var(--color-text-secondary, #666)", marginTop: 2 }}>
-              {lastUpdate ? `Última actualización: ${lastUpdate}` : "No actualizado aún"}
+    <div style={{ maxWidth: 1200, margin: "0 auto", padding: "2rem", fontFamily: 'system-ui, sans-serif' }}>
+      <header style={{ marginBottom: "2rem" }}>
+        <h1 style={{ fontSize: 24, fontWeight: 700 }}>News Feed</h1>
+        <p style={{ color: "#666" }}>Inspiración diaria para arquitectos y diseñadores</p>
+      </header>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "1.5rem" }}>
+        {items.map((it, i) => (
+          <div key={i} style={{
+            background: "#fff",
+            border: "1px solid #eee",
+            borderRadius: 12,
+            padding: "1.5rem",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+            transition: "transform 0.2s",
+            cursor: "default"
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{
+                fontSize: 10, padding: "3px 8px", borderRadius: 20, fontWeight: 600, textTransform: 'uppercase',
+                ...(BADGE_STYLES[it.cat] || BADGE_STYLES.tech)
+              }}>
+                {CAT_LABELS[it.cat]}
+              </span>
+              <span style={{ fontSize: 11, color: "#999" }}>{fmtDate(it.pubDate)}</span>
+            </div>
+            <h3 style={{ fontSize: 16, margin: 0, lineHeight: 1.3 }}>{it.title}</h3>
+            <p style={{ fontSize: 13, color: "#555", margin: 0, flexGrow: 1 }}>{it.desc}</p>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#888" }}>{it.source}</span>
+              <a href={it.link} target="_blank" rel="noopener noreferrer" style={{
+                fontSize: 12, color: "#000", fontWeight: 700, textDecoration: 'none', borderBottom: '1px solid #000'
+              }}>Leer más</a>
             </div>
           </div>
-          <button
-            onClick={load}
-            disabled={loading}
-            style={{
-              display: "flex", alignItems: "center", gap: 6,
-              padding: "6px 14px", fontSize: 13,
-              border: "0.5px solid var(--color-border-secondary, #ccc)",
-              borderRadius: 8, background: "transparent",
-              cursor: loading ? "not-allowed" : "pointer",
-              opacity: loading ? 0.5 : 1,
-            }}
-          >
-            {loading ? "⏳" : "↻"} Actualizar
-          </button>
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {filters.map((f) => (
-            <button
-              key={f.key}
-              onClick={() => setFilter(f.key)}
-              style={{
-                padding: "4px 12px", fontSize: 12, borderRadius: 999,
-                border: "0.5px solid var(--color-border-tertiary, #e5e5e5)",
-                background: filter === f.key ? "var(--color-text-primary, #000)" : "transparent",
-                color: filter === f.key ? "var(--color-background-primary, #fff)" : "var(--color-text-secondary, #666)",
-                cursor: "pointer",
-              }}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
+        ))}
       </div>
-
-      {/* Stats */}
-      {items.length > 0 && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: "1.5rem" }}>
-          {[
-            { n: items.length, l: "artículos" },
-            { n: counts.arch, l: "arquitectura" },
-            { n: counts.design, l: "diseño" },
-            { n: counts.tech, l: "tech / AI" },
-          ].map((s, i) => (
-            <div key={i} style={{ background: "var(--color-background-secondary, #f5f5f5)", borderRadius: 8, padding: "0.75rem 1rem" }}>
-              <div style={{ fontSize: 22, fontWeight: 500 }}>{s.n}</div>
-              <div style={{ fontSize: 12, color: "var(--color-text-secondary, #666)", marginTop: 2 }}>{s.l}</div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Error */}
-      {error && (
-        <div style={{ fontSize: 13, color: "var(--color-text-danger, #c00)", background: "var(--color-background-danger, #fee)", borderRadius: 8, padding: "0.75rem 1rem", marginBottom: "1rem" }}>
-          {error}
-        </div>
-      )}
-
-      {/* Grid */}
-      {!items.length && !loading ? (
-        <div style={{ textAlign: "center", padding: "3rem 1rem", color: "var(--color-text-secondary, #666)", fontSize: 14 }}>
-          Presioná "Actualizar" para cargar las últimas noticias.
-        </div>
-      ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-          {visible.map((it, i) => (
-            <div key={i} style={{
-              background: "var(--color-background-primary, #fff)",
-              border: "0.5px solid var(--color-border-tertiary, #e5e5e5)",
-              borderRadius: 12, padding: "1rem 1.25rem",
-              display: "flex", flexDirection: "column", gap: 8,
-            }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{
-                  fontSize: 11, padding: "2px 8px", borderRadius: 999, fontWeight: 500,
-                  ...(BADGE_STYLES[it.cat] || BADGE_STYLES.tech),
-                }}>
-                  {CAT_LABELS[it.cat] || it.cat}
-                </span>
-                <span style={{ fontSize: 11, color: "var(--color-text-tertiary, #999)" }}>{fmtDate(it.pubDate)}</span>
-              </div>
-              <div style={{ fontSize: 14, fontWeight: 500, lineHeight: 1.4 }}>{it.title}</div>
-              <div style={{ fontSize: 13, color: "var(--color-text-secondary, #666)", lineHeight: 1.5, flexGrow: 1 }}>{it.desc}</div>
-              <div style={{ fontSize: 11, color: "var(--color-text-tertiary, #999)" }}>{it.source}</div>
-              <a href={it.link} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "var(--color-text-info, #185FA5)", textDecoration: "none", marginTop: "auto" }}>
-                Leer artículo →
-              </a>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
