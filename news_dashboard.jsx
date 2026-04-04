@@ -8,13 +8,6 @@ const FEEDS = [
   { url: "https://hnrss.org/frontpage", label: "Hacker News", cat: "tech" }
 ];
 
-// Múltiples proxies para fallback
-const PROXIES = [
-  "https://api.allorigins.win/get?url=",
-  "https://api.codetabs.com/v1/proxy?quest=",
-  "https://corsproxy.io/?"
-];
-
 const BADGE_STYLES = {
   arquitectura: { bg: "#000", color: "#fff" },
   diseño: { bg: "#fff", color: "#000", border: "1px solid #000" },
@@ -22,48 +15,35 @@ const BADGE_STYLES = {
   ai: { bg: "#5e5ce6", color: "#fff" }
 };
 
-// Función para obtener feed con reintentos y fallback de proxies
-const fetchFeedWithFallback = async (feed, maxRetries = 2) => {
-  for (let proxy of PROXIES) {
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        const res = await fetch(`${proxy}${encodeURIComponent(feed.url)}&t=${Date.now()}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        
-        const data = await res.json();
-        const contents = data.contents || data;
-        
-        const parser = new DOMParser();
-        const xml = parser.parseFromString(contents, "text/xml");
-        
-        // Verificar si es un error de parsing
-        if (xml.querySelector("parsererror")) {
-          throw new Error("XML parse error");
-        }
-        
-        const entries = Array.from(xml.querySelectorAll("item, entry"));
-        
-        console.log(`✅ ${feed.label}: ${entries.length} entradas encontradas`);
-        
-        return entries.slice(0, 10).map(e => ({
-          title: e.querySelector("title")?.textContent?.trim() || "Sin título",
-          link: e.querySelector("link")?.textContent || e.querySelector("link")?.getAttribute("href") || "#",
-          desc: (e.querySelector("description, summary, content")?.textContent || "").replace(/<[^>]*>/g, '').slice(0, 150),
-          pubDate: e.querySelector("pubDate, updated, published")?.textContent || new Date().toISOString(),
-          source: feed.label,
-          cat: feed.cat
-        }));
-      } catch (err) {
-        console.warn(`⚠️ ${feed.label} - Proxy ${proxy} - Intento ${attempt + 1}: ${err.message}`);
-        if (attempt < maxRetries) {
-          await new Promise(r => setTimeout(r, 500 * (attempt + 1))); // Backoff exponencial
-        }
-      }
+// Usar rss2json API - más confiable que proxies CORS
+const fetchFeed = async (feed) => {
+  try {
+    const apiUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feed.url)}&count=10`;
+    
+    const res = await fetch(apiUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    
+    const data = await res.json();
+    
+    if (data.status !== "ok") {
+      throw new Error(data.message || "RSS parse error");
     }
+    
+    console.log(`✅ ${feed.label}: ${data.items?.length || 0} noticias`);
+    
+    return (data.items || []).map(item => ({
+      title: item.title || "Sin título",
+      link: item.link || "#",
+      desc: (item.description || item.content || "").replace(/<[^>]*>/g, '').slice(0, 150),
+      pubDate: item.pubDate || new Date().toISOString(),
+      source: feed.label,
+      cat: feed.cat
+    }));
+    
+  } catch (err) {
+    console.error(`❌ ${feed.label}:`, err.message);
+    return [];
   }
-  
-  console.error(`❌ ${feed.label}: Todos los proxies fallaron`);
-  return [];
 };
 
 export default function NewsDashboard() {
@@ -76,29 +56,25 @@ export default function NewsDashboard() {
     setErrors([]);
     
     try {
-      // Procesar feeds secuencialmente para evitar rate limits
-      const allItems = [];
-      const failedFeeds = [];
+      // Cargar todos los feeds en paralelo
+      const results = await Promise.all(
+        FEEDS.map(async (feed) => {
+          const items = await fetchFeed(feed);
+          return { feed: feed.label, items };
+        })
+      );
       
-      for (const feed of FEEDS) {
-        const feedItems = await fetchFeedWithFallback(feed);
-        if (feedItems.length === 0) {
-          failedFeeds.push(feed.label);
-        } else {
-          allItems.push(...feedItems);
-        }
-      }
+      const failed = results.filter(r => r.items.length === 0).map(r => r.feed);
+      if (failed.length > 0) setErrors(failed);
       
-      if (failedFeeds.length > 0) {
-        setErrors(failedFeeds);
-      }
+      const allItems = results.flatMap(r => r.items);
       
-      // Ordenar por fecha y tomar las 30 más recientes
+      // Ordenar por fecha (más recientes primero) y tomar 30
       const sorted = allItems
         .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate))
         .slice(0, 30);
       
-      console.log(`📰 Total: ${sorted.length} noticias cargadas`);
+      console.log(`📰 Total: ${sorted.length} noticias`);
       setItems(sorted);
       
     } catch (e) {
@@ -110,8 +86,8 @@ export default function NewsDashboard() {
 
   useEffect(() => { 
     loadFeeds(); 
-    // Recargar cada 5 minutos
-    const interval = setInterval(loadFeeds, 5 * 60 * 1000);
+    // Recargar cada 10 minutos (rss2json cachea 1 hora en plan gratis)
+    const interval = setInterval(loadFeeds, 10 * 60 * 1000);
     return () => clearInterval(interval);
   }, [loadFeeds]);
 
@@ -175,7 +151,10 @@ export default function NewsDashboard() {
       
       {items.length === 0 && (
         <div style={{ textAlign: 'center', padding: '4rem', color: '#999' }}>
-          No se pudieron cargar noticias. Intenta recargar la página.
+          No se pudieron cargar noticias. 
+          <button onClick={loadFeeds} style={{ marginLeft: '1rem', padding: '0.5rem 1rem' }}>
+            Reintentar
+          </button>
         </div>
       )}
     </div>
