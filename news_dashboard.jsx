@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 
 const FEEDS = [
-  // ARQUITECTURA GLOBAL (8 fuentes)
+  // ARQUITECTURA (8 fuentes)
   { url: "https://feeds.feedburner.com/ArchDaily", label: "ArchDaily", cat: "arquitectura" },
   { url: "https://www.dezeen.com/feed/", label: "Dezeen", cat: "arquitectura" },
   { url: "https://www.designboom.com/feed/", label: "Designboom", cat: "arquitectura" },
@@ -37,42 +37,102 @@ const BADGE_STYLES = {
   ai: { bg: "#5e5ce6", color: "#fff" }
 };
 
+// Múltiples proxies CORS para fallback
+const PROXIES = [
+  { url: "https://corsproxy.io/?", type: "direct" },  // Devuelve contenido directo
+  { url: "https://api.allorigins.win/raw?url=", type: "direct" },  // Devuelve XML directo
+  { url: "https://api.allorigins.win/get?url=", type: "json" }  // Devuelve JSON con .contents
+];
+
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 const extractImage = (item) => {
-  if (item.enclosure?.link && item.enclosure.type?.startsWith('image/')) {
-    return item.enclosure.link;
-  }
-  if (item.thumbnail) return item.thumbnail;
-  const imgMatch = item.content?.match(/<img[^>]+src=["']([^"']+)["']/i);
+  // 1. Media content (YouTube, etc)
+  const media = item.querySelector("media\\:content, content");
+  if (media?.getAttribute("url")) return media.getAttribute("url");
+  
+  // 2. Enclosure
+  const enclosure = item.querySelector("enclosure");
+  if (enclosure?.getAttribute("url")) return enclosure.getAttribute("url");
+  
+  // 3. Imagen en description/content
+  const desc = item.querySelector("description, content\\:encoded, content")?.textContent || "";
+  const imgMatch = desc.match(/<img[^>]+src=["']([^"']+)["']/i);
   if (imgMatch) return imgMatch[1];
-  const descMatch = item.description?.match(/<img[^>]+src=["']([^"']+)["']/i);
-  if (descMatch) return descMatch[1];
+  
   return null;
 };
 
-const fetchFeed = async (feed) => {
-  try {
-    const apiUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feed.url)}&count=8`;
-    
-    const res = await fetch(apiUrl);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    
-    const data = await res.json();
-    if (data.status !== "ok") throw new Error(data.message || "RSS error");
-    
-    return (data.items || []).map(item => ({
-      title: item.title || "Sin título",
-      link: item.link || "#",
-      desc: (item.description || "").replace(/<[^>]*>/g, '').slice(0, 120),
-      pubDate: item.pubDate || new Date().toISOString(),
-      source: feed.label,
-      cat: feed.cat,
-      image: extractImage(item)
-    }));
-    
-  } catch (err) {
-    console.error(`❌ ${feed.label}:`, err.message);
-    return [];
+const parseXML = (xmlText) => {
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(xmlText, "text/xml");
+  
+  // Verificar error de parsing
+  if (xml.querySelector("parsererror")) {
+    throw new Error("XML parse error");
   }
+  
+  const items = xml.querySelectorAll("item, entry");
+  
+  return Array.from(items).slice(0, 8).map(item => {
+    const title = item.querySelector("title")?.textContent?.trim() || "Sin título";
+    const linkEl = item.querySelector("link");
+    const link = linkEl?.textContent || linkEl?.getAttribute("href") || "#";
+    const pubDate = item.querySelector("pubDate, updated, published")?.textContent || new Date().toISOString();
+    const desc = (item.querySelector("description, summary")?.textContent || "").replace(/<[^>]*>/g, '').slice(0, 120);
+    
+    return {
+      title,
+      link,
+      desc,
+      pubDate,
+      image: extractImage(item)
+    };
+  });
+};
+
+const fetchFeed = async (feed, index) => {
+  // Delay escalonado para evitar rate limits (300ms entre cada feed)
+  await delay(index * 300);
+  
+  for (const proxy of PROXIES) {
+    try {
+      const proxyUrl = `${proxy.url}${encodeURIComponent(feed.url)}`;
+      const res = await fetch(proxyUrl, { 
+        signal: AbortSignal.timeout(10000) // 10 segundos timeout
+      });
+      
+      if (!res.ok) continue;
+      
+      let xmlText;
+      if (proxy.type === "json") {
+        const data = await res.json();
+        xmlText = data.contents;
+      } else {
+        xmlText = await res.text();
+      }
+      
+      if (!xmlText || xmlText.length < 50) continue;
+      
+      const items = parseXML(xmlText);
+      
+      if (items.length > 0) {
+        console.log(`✅ ${feed.label}: ${items.length} noticias`);
+        return items.map(item => ({
+          ...item,
+          source: feed.label,
+          cat: feed.cat
+        }));
+      }
+      
+    } catch (err) {
+      console.warn(`⚠️ ${feed.label} - ${proxy.url.slice(0, 20)}: ${err.message}`);
+      continue;
+    }
+  }
+  
+  console.error(`❌ ${feed.label}: Todos los proxies fallaron`);
+  return [];
 };
 
 export default function NewsDashboard() {
@@ -86,12 +146,13 @@ export default function NewsDashboard() {
     setErrors([]);
     
     try {
-      const results = await Promise.all(
-        FEEDS.map(async (feed) => {
-          const items = await fetchFeed(feed);
-          return { feed: feed.label, items };
-        })
-      );
+      // Cargar feeds secuencialmente con delay
+      const results = [];
+      for (let i = 0; i < FEEDS.length; i++) {
+        const feed = FEEDS[i];
+        const items = await fetchFeed(feed, i);
+        results.push({ feed: feed.label, items });
+      }
       
       const failed = results.filter(r => r.items.length === 0).map(r => r.feed);
       if (failed.length > 0) setErrors(failed);
@@ -100,7 +161,7 @@ export default function NewsDashboard() {
       
       const sorted = allItems
         .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate))
-        .slice(0, 60); // Aumentado a 60 noticias
+        .slice(0, 60);
       
       console.log(`📰 Total: ${sorted.length} noticias de ${FEEDS.length - failed.length} fuentes`);
       setItems(sorted);
@@ -114,7 +175,7 @@ export default function NewsDashboard() {
 
   useEffect(() => { 
     loadFeeds(); 
-    const interval = setInterval(loadFeeds, 15 * 60 * 1000);
+    const interval = setInterval(loadFeeds, 20 * 60 * 1000); // 20 minutos
     return () => clearInterval(interval);
   }, [loadFeeds]);
 
@@ -136,6 +197,7 @@ export default function NewsDashboard() {
     }}>
       <div style={{ fontSize: '1.5rem', fontWeight: 800 }}>CURANDO VOC CEL...</div>
       <div style={{ fontSize: '0.8rem', color: '#999' }}>Cargando {FEEDS.length} feeds RSS</div>
+      <div style={{ fontSize: '0.7rem', color: '#ccc' }}>Esto puede tomar unos segundos...</div>
     </div>
   );
 
@@ -150,12 +212,11 @@ export default function NewsDashboard() {
         </p>
         {errors.length > 0 && (
           <p style={{ margin: "10px 0 0 0", color: "#e74c3c", fontSize: 11 }}>
-            ⚠️ No cargaron: {errors.join(", ")}
+            ⚠️ No cargaron ({errors.length}): {errors.slice(0, 5).join(", ")}{errors.length > 5 ? "..." : ""}
           </p>
         )}
       </header>
 
-      {/* Filtros */}
       <div style={{ 
         display: 'flex', 
         gap: '0.5rem', 
@@ -177,7 +238,7 @@ export default function NewsDashboard() {
               fontWeight: 600
             }}
           >
-            {cat === 'all' ? 'Todas' : cat}
+            {cat === 'all' ? `Todas (${items.length})` : `${cat} (${items.filter(i => i.cat === cat).length})`}
           </button>
         ))}
       </div>
@@ -261,6 +322,20 @@ export default function NewsDashboard() {
       {filteredItems.length === 0 && (
         <div style={{ textAlign: 'center', padding: '4rem', color: '#999' }}>
           No hay noticias en esta categoría.
+          <button 
+            onClick={loadFeeds} 
+            style={{ 
+              display: 'block', 
+              margin: '1rem auto', 
+              padding: '0.75rem 1.5rem',
+              background: '#000',
+              color: '#fff',
+              border: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            Reintentar carga
+          </button>
         </div>
       )}
     </div>
