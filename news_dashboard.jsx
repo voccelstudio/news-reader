@@ -37,25 +37,24 @@ const BADGE_STYLES = {
   ai: { bg: "#5e5ce6", color: "#fff" }
 };
 
-// Múltiples proxies CORS para fallback
+// Proxies actualizados y funcionales en 2025 [^76^]
 const PROXIES = [
-  { url: "https://corsproxy.io/?", type: "direct" },  // Devuelve contenido directo
-  { url: "https://api.allorigins.win/raw?url=", type: "direct" },  // Devuelve XML directo
-  { url: "https://api.allorigins.win/get?url=", type: "json" }  // Devuelve JSON con .contents
+  { url: "https://api.codetabs.com/v1/proxy?quest=", type: "direct" },
+  { url: "https://cors.lol/?", type: "direct" },
+  { url: "https://thebugging.com/cors-proxy/", type: "direct" },
+  { url: "https://api.allorigins.win/raw?url=", type: "direct" },
+  { url: "https://api.allorigins.win/get?url=", type: "json" }
 ];
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const extractImage = (item) => {
-  // 1. Media content (YouTube, etc)
   const media = item.querySelector("media\\:content, content");
   if (media?.getAttribute("url")) return media.getAttribute("url");
   
-  // 2. Enclosure
   const enclosure = item.querySelector("enclosure");
   if (enclosure?.getAttribute("url")) return enclosure.getAttribute("url");
   
-  // 3. Imagen en description/content
   const desc = item.querySelector("description, content\\:encoded, content")?.textContent || "";
   const imgMatch = desc.match(/<img[^>]+src=["']([^"']+)["']/i);
   if (imgMatch) return imgMatch[1];
@@ -67,7 +66,6 @@ const parseXML = (xmlText) => {
   const parser = new DOMParser();
   const xml = parser.parseFromString(xmlText, "text/xml");
   
-  // Verificar error de parsing
   if (xml.querySelector("parsererror")) {
     throw new Error("XML parse error");
   }
@@ -81,28 +79,29 @@ const parseXML = (xmlText) => {
     const pubDate = item.querySelector("pubDate, updated, published")?.textContent || new Date().toISOString();
     const desc = (item.querySelector("description, summary")?.textContent || "").replace(/<[^>]*>/g, '').slice(0, 120);
     
-    return {
-      title,
-      link,
-      desc,
-      pubDate,
-      image: extractImage(item)
-    };
+    return { title, link, desc, pubDate, image: extractImage(item) };
   });
 };
 
 const fetchFeed = async (feed, index) => {
-  // Delay escalonado para evitar rate limits (300ms entre cada feed)
-  await delay(index * 300);
+  // Delay escalonado: 500ms entre cada feed
+  await delay(index * 500);
+  
+  let lastError = null;
   
   for (const proxy of PROXIES) {
     try {
       const proxyUrl = `${proxy.url}${encodeURIComponent(feed.url)}`;
-      const res = await fetch(proxyUrl, { 
-        signal: AbortSignal.timeout(10000) // 10 segundos timeout
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 segundos timeout
       
-      if (!res.ok) continue;
+      const res = await fetch(proxyUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      
+      if (!res.ok) {
+        lastError = `HTTP ${res.status}`;
+        continue;
+      }
       
       let xmlText;
       if (proxy.type === "json") {
@@ -112,26 +111,26 @@ const fetchFeed = async (feed, index) => {
         xmlText = await res.text();
       }
       
-      if (!xmlText || xmlText.length < 50) continue;
+      if (!xmlText || xmlText.length < 50 || xmlText.includes("error")) {
+        lastError = "Empty or invalid response";
+        continue;
+      }
       
       const items = parseXML(xmlText);
       
       if (items.length > 0) {
-        console.log(`✅ ${feed.label}: ${items.length} noticias`);
-        return items.map(item => ({
-          ...item,
-          source: feed.label,
-          cat: feed.cat
-        }));
+        console.log(`✅ ${feed.label}: ${items.length} noticias via ${proxy.url.slice(0, 20)}...`);
+        return items.map(item => ({ ...item, source: feed.label, cat: feed.cat }));
       }
       
     } catch (err) {
+      lastError = err.message;
       console.warn(`⚠️ ${feed.label} - ${proxy.url.slice(0, 20)}: ${err.message}`);
       continue;
     }
   }
   
-  console.error(`❌ ${feed.label}: Todos los proxies fallaron`);
+  console.error(`❌ ${feed.label}: Todos los proxies fallaron - ${lastError}`);
   return [];
 };
 
@@ -140,18 +139,20 @@ export default function NewsDashboard() {
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState([]);
   const [activeFilter, setActiveFilter] = useState('all');
+  const [progress, setProgress] = useState(0);
 
   const loadFeeds = useCallback(async () => {
     setLoading(true);
     setErrors([]);
+    setProgress(0);
     
     try {
-      // Cargar feeds secuencialmente con delay
       const results = [];
       for (let i = 0; i < FEEDS.length; i++) {
         const feed = FEEDS[i];
         const items = await fetchFeed(feed, i);
         results.push({ feed: feed.label, items });
+        setProgress(Math.round(((i + 1) / FEEDS.length) * 100));
       }
       
       const failed = results.filter(r => r.items.length === 0).map(r => r.feed);
@@ -175,7 +176,7 @@ export default function NewsDashboard() {
 
   useEffect(() => { 
     loadFeeds(); 
-    const interval = setInterval(loadFeeds, 20 * 60 * 1000); // 20 minutos
+    const interval = setInterval(loadFeeds, 30 * 60 * 1000); // 30 minutos
     return () => clearInterval(interval);
   }, [loadFeeds]);
 
@@ -197,7 +198,20 @@ export default function NewsDashboard() {
     }}>
       <div style={{ fontSize: '1.5rem', fontWeight: 800 }}>CURANDO VOC CEL...</div>
       <div style={{ fontSize: '0.8rem', color: '#999' }}>Cargando {FEEDS.length} feeds RSS</div>
-      <div style={{ fontSize: '0.7rem', color: '#ccc' }}>Esto puede tomar unos segundos...</div>
+      <div style={{ fontSize: '0.7rem', color: '#ccc' }}>Progreso: {progress}%</div>
+      <div style={{ 
+        width: '200px', 
+        height: '2px', 
+        background: '#eee',
+        marginTop: '0.5rem'
+      }}>
+        <div style={{
+          width: `${progress}%`,
+          height: '100%',
+          background: '#000',
+          transition: 'width 0.3s ease'
+        }} />
+      </div>
     </div>
   );
 
@@ -212,7 +226,7 @@ export default function NewsDashboard() {
         </p>
         {errors.length > 0 && (
           <p style={{ margin: "10px 0 0 0", color: "#e74c3c", fontSize: 11 }}>
-            ⚠️ No cargaron ({errors.length}): {errors.slice(0, 5).join(", ")}{errors.length > 5 ? "..." : ""}
+            ⚠️ No cargaron ({errors.length}): {errors.slice(0, 3).join(", ")}{errors.length > 3 ? "..." : ""}
           </p>
         )}
       </header>
@@ -321,20 +335,19 @@ export default function NewsDashboard() {
       
       {filteredItems.length === 0 && (
         <div style={{ textAlign: 'center', padding: '4rem', color: '#999' }}>
-          No hay noticias en esta categoría.
+          <div style={{ marginBottom: '1rem' }}>No hay noticias disponibles</div>
           <button 
             onClick={loadFeeds} 
             style={{ 
-              display: 'block', 
-              margin: '1rem auto', 
               padding: '0.75rem 1.5rem',
               background: '#000',
               color: '#fff',
               border: 'none',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              fontSize: '0.9rem'
             }}
           >
-            Reintentar carga
+            🔄 Reintentar carga
           </button>
         </div>
       )}
